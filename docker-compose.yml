@@ -1,0 +1,147 @@
+version: '3'
+
+services:
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    command:
+      - --api=true
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.network=proxy
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.tcpdns.address=:53/tcp
+      - --entrypoints.udpdns.address=:53/udp
+#      - --log.level=DEBUG
+      - --certificatesresolvers.myresolver.acme.email=markus.hupfauer11@gmail.com
+      - --certificatesresolvers.myresolver.acme.storage=acme.json
+      - --certificatesresolvers.myresolver.acme.dnschallenge=true
+      - --certificatesresolvers.myresolver.acme.dnschallenge.provider=cloudflare
+    restart: unless-stopped
+    networks:
+      - proxy
+    ports:
+      - 53:53/udp
+      - 53:53/tcp
+      - 80:80
+      - 443:443
+      - 8080:8080
+    env_file: traefik.env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /root/apps/acme.json:/acme.json
+
+
+
+##############################################################
+#              PAPERLESS CONFIGURATION                       #
+##############################################################
+  broker:
+    image: redis:6.0
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  db:
+    image: postgres:13
+    restart: unless-stopped
+    networks: 
+      - proxy
+    volumes:
+      - $PWD/apps.d/paperless-ng/pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: paperless
+      POSTGRES_USER: paperless
+      POSTGRES_PASSWORD: paperless
+
+  webserver:
+    image: jonaswinkler/paperless-ng:latest
+    restart: unless-stopped
+    depends_on:
+      - db
+      - broker
+    networks:
+      - proxy
+    volumes:
+      - $PWD/apps.d/paperless-ng/storagebox/dms/data:/usr/src/paperless/data
+      - $PWD/apps.d/paperless-ng/storagebox/dms/media:/usr/src/paperless/media
+      - $PWD/apps.d/paperless-ng/export:/usr/src/paperless/export
+      - $PWD/apps.d/paperless-ng/consume:/usr/src/paperless/consume
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_DBHOST: db
+    env_file: paperless.env
+    labels:
+      - traefik.enable=true
+      - traefik.http.middlewares.dms-redirectscheme.redirectscheme.scheme=https
+      - traefik.http.routers.paperless.rule=Host(`dms.hupfauer.one`)
+      - traefik.http.routers.paperless.tls=true
+      - traefik.http.routers.paperless.tls.certresolver=myresolver
+      - traefik.http.routers.paperless.entrypoints=web, websecure
+      - traefik.http.routers.paperless.middlewares=dms-redirectscheme
+
+
+##############################################################
+#                PI-HOLE CONFIGURATION                       #
+##############################################################
+  pihole:
+    image: pihole/pihole:latest
+    restart: unless-stopped
+    networks:
+      - proxy
+    env_file: pihole.env
+    volumes:
+      - $PWD/apps.d/pihole/etc-pihole/:/etc/pihole/
+      - $PWD/apps.d/pihole/etc-dnsmasq.d/:/etc/dnsmasq.d/
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.pihole.loadbalancer.server.port=80
+      - traefik.http.routers.pihole.rule=Host(`dns.hupfauer.one`)
+      - traefik.http.routers.pihole.tls=true
+      - traefik.http.routers.pihole.tls.certresolver=myresolver
+      - traefik.http.routers.pihole.entrypoints=web, websecure
+      - traefik.udp.services.pihole-dns-udp.loadbalancer.server.port=53
+      - traefik.udp.routers.udp-pihole.entrypoints=udpdns
+      - traefik.udp.routers.udp-pihole.service=pihole-dns-udp
+      - traefik.tcp.services.pihole-dns-tcp.loadbalancer.server.port=53
+      - traefik.tcp.routers.tcp-pihole.rule=HostSNI(`*`)
+      - traefik.tcp.routers.tcp-pihole.entrypoints=tcpdns
+      - traefik.tcp.routers.tcp-pihole.service=pihole-dns-tcp
+
+
+##############################################################
+#              VAULTWARDEN CONFIGURATION                     #
+##############################################################
+
+  vaultwarden:
+    image: vaultwarden/server:alpine
+    restart: unless-stopped
+    environment:
+      WEBSOCKET_ENABLED: "true"
+      DISABLE_ICON_DOWNLOAD: "true"
+      SIGNUPS_ALLOWED: "false"
+      SENDS_ALLOWED: "false"
+      PASSWORD_ITERATIONS: 500000
+    env_file: vaultwarden.env
+    volumes:
+      - $PWD/apps.d/pass/data:/data
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.middlewares.pass-redirectscheme.redirectscheme.scheme=https
+      - traefik.http.routers.pass.rule=Host(`pass.hupfauer.one`)
+      - traefik.http.routers.pass.tls=true
+      - traefik.http.routers.pass.tls.certresolver=myresolver
+      - traefik.http.routers.pass.entrypoints=web, websecure
+      - traefik.http.routers.pass.middlewares=pass-redirectscheme
+
+networks:
+  proxy:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: 1450
+  host:
+    external: true
