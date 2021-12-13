@@ -5,8 +5,8 @@ services:
     image: traefik:latest
     container_name: traefik
     command:
-      - --api=true
-      - --api.insecure=true
+#      - --api=true
+#      - --api.insecure=true
       - --providers.docker=true
       - --providers.docker.exposedByDefault=false
       - --providers.docker.network=proxy
@@ -27,7 +27,7 @@ services:
       - 53:53/tcp
       - 80:80
       - 443:443
-      - 8080:8080
+#      - 8080:8080
     env_file: traefik.env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -141,7 +141,6 @@ services:
 networks:
   proxy:
     driver: bridge
+    name: proxy
     driver_opts:
       com.docker.network.driver.mtu: 1450
-  host:
-    external: true
